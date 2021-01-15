@@ -1,0 +1,100 @@
+service: ingestion
+frameworkVersion: "2"
+
+custom:
+  apiKeys:
+    - name: IngestionKey
+
+plugins:
+  - serverless-add-api-key
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+
+  stage: dev
+  region: us-east-1
+
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - s3:ListBucket
+        - s3:GetObject
+        - s3:PutObject
+      Resource:
+        - !GetAtt UploadBucket.Arn
+        - !Join ["/", [!GetAtt UploadBucket.Arn, "*"]]
+    - Effect: Allow
+      Action:
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:BatchWriteItem
+      Resource:
+        - !GetAtt DataTable.Arn
+
+  environment:
+    UPLOAD_BUCKET: !Ref UploadBucket #bucket name
+    DATA_TABLE: !GetAtt DataTable.Arn
+    DATA_TABLE_NAME: !Ref DataTable
+    INGESTION_QUEUE: !GetAtt IngestionQueue.Arn
+
+functions:
+  GenerateURL:
+    handler: GenerateURL.handler
+    events:
+      - http:
+          path: url
+          method: get
+          private: true
+
+  IngestFile:
+    handler: IngestFile.handler
+    events:
+      - sqs:
+          arn: !GetAtt IngestionQueue.Arn
+
+resources:
+  Resources:
+
+    UploadBucket:
+      Type: AWS::S3::Bucket
+      DependsOn: IngestionQueue
+      Properties:
+        BucketName: ingestion-upload-bucket
+        NotificationConfiguration:
+          QueueConfigurations:
+            - Queue: !GetAtt IngestionQueue.Arn
+              Event: s3:ObjectCreated:Put
+
+    IngestionQueue:
+      Type: AWS::SQS::Queue
+
+    IngestionQueuePolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref IngestionQueue
+        PolicyDocument:
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - SQS:SendMessage
+              Resource: !GetAtt IngestionQueue.Arn
+              Principal:
+                Service: s3.amazonaws.com
+              Condition:
+                ArnLike:
+                  aws:SourceArn: "arn:aws:s3:*:*:ingestion-upload-bucket"
+
+    DataTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: "PK"
+            AttributeType: "S"
+        KeySchema:
+          - AttributeName: "PK"
+            KeyType: "HASH"
+        TableName: IngestionDataTable
