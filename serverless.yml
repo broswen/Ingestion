@@ -65,6 +65,11 @@ resources:
         NotificationConfiguration:
           QueueConfigurations:
             - Queue: !GetAtt IngestionQueue.Arn
+              Filter:
+                S3Key:
+                  Rules:
+                    - Name: suffix
+                      Value: .csv
               Event: s3:ObjectCreated:Put
 
     IngestionQueue:
